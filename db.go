@@ -91,6 +91,7 @@ const (
 
 type (
 	DB struct {
-		opt Options
+		opt 		Options		// the database options
+		BPTreeIdx 	BPTreeIdx	// Hint Index
 	}
 )
