@@ -170,3 +170,174 @@ func getRecordWrapper(numFound int, keys [][]byte, pointers []interface{}) (reco
 	return records, nil
 }
 
+// PrefixScan returns records at the given prefix and limitNum
+// limitNum: limit the number of the scanned records return
+func (t *BPTree) PrefixScan(prefix []byte, limitNum int) (records Records, err error) {
+	var (
+		n				*Node
+		scanFlag		bool
+		keys			[][]byte
+		pointers		[]interface{}
+		i, j, numberFound	int
+	)
+
+	n = t.FindLeaf(prefix)
+
+	if n == nil {
+		return nil, ErrPrefixScansNoResult
+	}
+
+	for j = 0; j < n.KeysNum && compare(n.Keys[j], prefix) < 0; {
+		j++
+	}
+
+	scanFlag = true
+	numberFound = 0
+	for n != nil && scanFlag {
+		for i = j; i < n.KeysNum; i++ {
+			if !bytes.HasPrefix(n.Keys[i], prefix) {
+				scanFlag = false
+				break
+			}
+
+			keys = append(keys, n.Keys[i])
+			pointers = append(pointers, n.pointers[i])
+			numberFound++
+
+			if limitNum > 0 && numberFound == limitNum {
+				scanFlag = false
+				break
+			}
+		}
+
+		n, _ = n.pointers[order-1].(*Node)
+		j = 0
+	}
+
+	return getRecordWrapper(numberFound, keys, pointers)
+}
+
+// Find retrieves record at the given key
+func (t *BPTree) Find(key []byte) (*Record, error) {
+	var (
+		leaf 	*Node
+		i		int
+	)
+
+	// Find leaf by key
+	leaf = t.FindLeaf(key)
+
+	if leaf == nil {
+		return nil, ErrKeyNotFound
+	}
+
+	for i = 0; i < leaf.KeysNum; i++ {
+		if compare(key, leaf.Keys[i]) == 0 {
+			break
+		}
+	}
+
+	if i == leaf.KeysNum {
+		return nil, ErrKeyNotFound
+	}
+
+	return leaf.pointers[i].(*Record), nil
+}
+
+// startNewTree returns a start new tree
+func (t *BPTree) startNewTree(key []byte, pointer *Record) error {
+	t.root = newLeaf()
+	t.root.Keys[0] = key
+	t.root.pointers[0] = pointer
+	t.root.KeysNum = 1
+
+	return nil
+}
+
+// Insert inserts record to the b+ tree
+// and if the key exists, update the record and the counter(if countFlag set true, it will start count)
+func (t *BPTree)Insert(key []byte, e *Entry, h *Hint, countFlag bool) error {
+	if r, err := t.Find(key); err == nil && r != nil {
+		if countFlag && h.meta.Flag == DataDeleteFlag && r.H.meta.Flag != DataDeleteFlag && t.ValidKeyCount > 0 {
+			t.ValidKeyCount--
+		}
+
+		if countFlag && h.meta.Flag != DataDeleteFlag && r.H.meta.Flag == DataDeleteFlag {
+			t.ValidKeyCount++
+		}
+
+		return r.UpdateRecord(h, e)
+	}
+
+	// Initialize the Record object when key does not exist
+	pointer := &Record{H:h, E:e}
+
+	// UPdate the validKeyCount number
+	t.ValidKeyCount++
+
+	// Check if the root nodes is nil or not
+	// if nil build a start new tree for insert
+	if t.root == nil {
+		return t.startNewTree(key, pointer)
+	}
+
+	// Find the leaf node to insert
+	leaf := t.FindLeaf(key)
+
+	// Check if the leaf node is full or not
+	// if not full insert into the leaf node
+	if leaf.KeysNum < order-1 {
+		insertIntoLeaf(leaf, key, pointer)
+		return nil
+	}
+
+	// split the leaf node when it is not enough space to insert
+	return t.splitLeaf(leaf, key, pointer)
+}
+
+// splitLeaf splits leaf and insert the parent node when the leaf is full
+func (t *BPTree) splitLeaf(leaf *Node, key []byte, pointer *Record) eror {
+	var j, k, i int
+
+	tempKeys := make([][]byte, order)
+	tempPointers := make([]interface{}, order)
+
+
+}
+
+// insertIntoNewRoot returns a now root when the insertIntoParent is called
+func (t *BPTree) insertIntoNewRoot(left *Node, key []byte, right *Node) error {
+	t.root = newNode()
+
+	t.root.Keys[0] = key
+	t.root.pointers[0] = left
+	t.root.pointers[1] = right
+	t.root.KeysNum++
+	t.root.parent = nil
+
+	left.parent = t.root
+	right.parent = t.root
+
+	return nil
+}
+
+// insertIntoLeaf inserts the given node at the given key and pointer
+func insertIntoLeaf(leaf *Node, key []byte, pointer *Record) {
+	i := 0
+	for i < leaf.KeysNum {
+		if compare(key, leaf.Keys[i]) > 0 {
+			i++
+		} else {
+				break
+		}
+	}
+
+	for j := leaf.KeysNum; j > i; j-- {
+		leaf.Keys[j] = leaf.Keys[j-1]
+		leaf.pointers[j] = leaf.pointers[j-1]
+	}
+
+	leaf.Keys[i] = key
+	leaf.pointers[i] = pointer
+	leaf.KeysNum++
+}
