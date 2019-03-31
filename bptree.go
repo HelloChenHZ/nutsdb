@@ -295,14 +295,83 @@ func (t *BPTree)Insert(key []byte, e *Entry, h *Hint, countFlag bool) error {
 	return t.splitLeaf(leaf, key, pointer)
 }
 
+// getSplitIndex returns split index at the given length.
+func getSplitIndex(length int) int {
+	if length%2 == 0 {
+		return length / 2
+	}
+
+	return length/2 + 1
+}
+
 // splitLeaf splits leaf and insert the parent node when the leaf is full
-func (t *BPTree) splitLeaf(leaf *Node, key []byte, pointer *Record) eror {
+func (t *BPTree) splitLeaf(leaf *Node, key []byte, pointer *Record) error {
 	var j, k, i int
 
-	tempKeys := make([][]byte, order)
-	tempPointers := make([]interface{}, order)
+	tmpKeys := make([][]byte, order)
+	tmpPointers := make([]interface{}, order)
 
+	// Find the ready position of the insertion
+	for i < order - 1 {
+		if compare(leaf.Keys[i], key) < 0 {
+			i++
+		} else {
+				break
+		}
+	}
 
+	// TmpKeys records the leaf keys
+	// temPointers records the leaf pointers
+	// and filter the ready position of insertion
+	for j = 0; j < leaf.KeysNum; j++ {
+		if k == i {
+			k++
+		}
+
+		tmpKeys[k] = leaf.Keys[j]
+		tmpPointers[k] = leaf.pointers[j]
+		k++
+	}
+
+	tmpKeys[i] = key
+	tmpPointers[i] = pointer
+
+	// Get the split index for the leaf node
+	splitIndex := getSplitIndex(order)
+
+	// Reset the keysNum of the leaf
+	leaf.KeysNum = 0
+
+	// Reset the keys and pointers
+	for i = 0; i < splitIndex; i++ {
+		leaf.Keys[i] = tmpKeys[i]
+		leaf.pointers[i] = tmpPointers[i]
+		leaf.KeysNum++
+	}
+
+	// Set the keys and pointers for the new leaf
+	j = 0
+	newLeaf := newLeaf()
+	for i = splitIndex; i < order; i++ {
+		newLeaf.Keys[j] = tmpKeys[i]
+		newLeaf.pointers[j] = tmpPointers[i]
+		newLeaf.KeysNum++
+		j++
+	}
+
+	// Set the last pointer of the new leaf node to point the last pointer of the leaf node
+	if leaf.pointers[order-1] != nil {
+		newLeaf.pointers[order-1] = leaf.pointers[order-1]
+	}
+
+	// Reset the last pointer of the leaf node
+	leaf.pointers[order-1] = newLeaf
+	// Set the parent
+	newLeaf.parent = leaf.parent
+
+	// Insert into the parent node at the given the first key of the new leaf node
+	newKey := newLeaf.Keys[0]
+	return t.insertIntoParent(leaf, newKey, newLeaf)
 }
 
 // insertIntoNewRoot returns a now root when the insertIntoParent is called
@@ -321,6 +390,112 @@ func (t *BPTree) insertIntoNewRoot(left *Node, key []byte, right *Node) error {
 	return nil
 }
 
+// insertIntoNode inserts into the givent node at the given leftIndex, key and right node
+func (t *BPTree) insertIntoNode(node *Node, leftIndex int, key []byte, right *Node) error {
+	for i := node.KeysNum; i > leftIndex; i-- {
+		node.Keys[i] = node.Keys[i-1]
+		node.pointers[i+1] = node.pointers[i]
+	}
+
+	node.Keys[leftIndex] = key
+	node.pointers[leftIndex+1] = right
+	node.KeysNum++
+
+	return nil
+}
+
+// insertIntoParent inserts to the parent of the givent node
+func (t *BPTree) insertIntoParent(left *Node, key []byte, right *Node) error {
+	// Check if the parent of the leaf node is nil or not
+	// if nil means the leaf is root node
+	if left.parent == nil {
+		return t.insertIntoNewRoot(left, key, right)
+	}
+
+	// Get the leaf index
+	leftIndex := 0
+	for leftIndex <= left.parent.KeysNum {
+		if left == left.parent.pointers[leftIndex] {
+			break
+		} else {
+			leftIndex++
+		}
+	}
+
+	// Check if the parent of left node is full or not
+	// if not full, then insert into the parent node
+	if left.parent.KeysNum < order-1 {
+		return t.insertIntoNode(left.parent, leftIndex, key, right)
+	}
+
+	// The parent of left node is full, split the parent node
+	return t.splitParent(left.parent, leftIndex, key, right)
+}
+
+// splitParent splits the given node at the given leftIndex, key and right node
+func (t *BPTree) splitParent(node *Node, leftIndex int, key []byte, right *Node) error {
+	tmpKeys := make([][]byte, order)
+	tmpPointers := make([]interface{}, order+1)
+
+	// In addition to the index location of leftIndex filtered out
+	// the other key of the node is stored in tmpKeys
+	var i, j int
+	for i = 0; i < node.KeysNum; i ++{
+		if i == leftIndex {
+			j++
+		}
+
+		tmpKeys[j] = node.Keys[i]
+		j++
+	}
+
+	// In addition to the index location of leftIndex+1 filtered out
+	// the other pointer of the node is stored in tmpPointers
+	j = 0
+	for i = 0; i < node.KeysNum+1; i++ {
+		if i == leftIndex+1 {
+			j++
+		}
+
+		tmpPointers[j] = node.pointers[i]
+		j++
+	}
+
+	tmpKeys[leftIndex] = key
+	tmpPointers[leftIndex+1] = right
+
+	// Get the split index for he intermediate node
+	splitIndex := getSplitIndex(order-1)
+
+	// Reset the last pointer of the node.
+	node.pointers[i] = tmpPointers[i]
+
+	newNode := newNode()
+
+	j = 0
+	for i++; i < order; i++ {
+		newNode.Keys[j] = tmpKeys[i]
+		newNode.pointers[j] = tmpPointers[i]
+		newNode.KeysNum++
+		j++
+	}
+
+	// Set the parent of the new node.
+	newNode.parent = node.parent
+
+	// Set the last pointer of the new node.
+	newNode.pointers[j] = tmpPointers[i]
+
+	// Set the parent of the pointer node for new node.
+	for i = 0; i <= newNode.KeysNum; i++ {
+		child := newNode.pointers[i].(*Node)
+		child.parent = newNode
+	}
+
+	// Insert into the parent node at the given the the first key of the new node.
+	newKey := tmpKeys[splitIndex]
+	return t.insertIntoParent(node, newKey, newNode)
+}
 // insertIntoLeaf inserts the given node at the given key and pointer
 func insertIntoLeaf(leaf *Node, key []byte, pointer *Record) {
 	i := 0
