@@ -1,6 +1,15 @@
 package nutsdb
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"github.com/HelloChenHZ/nutsdb/ds/list"
+	"github.com/HelloChenHZ/nutsdb/ds/set"
+	"github.com/HelloChenHZ/nutsdb/ds/zset"
+	"github.com/xujiajun/utils/filesystem"
+	"os"
+	"sync"
+)
 
 var (
 	// ErrDBClosed is returned when db is closed
@@ -91,7 +100,69 @@ const (
 
 type (
 	DB struct {
-		opt 		Options		// the database options
-		BPTreeIdx 	BPTreeIdx	// Hint Index
+		opt 			Options		// the database options
+		BPTreeIdx 		BPTreeIdx	// Hint Index
+		SetIdx 			SetIdx
+		SortedSetIdx	SortedSetIdx
+		ListIdx 		ListIdx
+		ActiveFile		*DataFile
+		MaxFileID		int64
+		mu 				sync.RWMutex
+		KeyCount		int // total key number, include expired, deleted, repeated
+		closed			bool
+		isMergeing		bool
+		committedTxIds	map[uint64]struct{}
 	}
+
+	// BPTreeIdx represents the B+ tree index
+	BPTreeIdx map[string]*BPTree
+
+	// SetIdx represents the sorted set index
+	SetIdx map[string]*set.Set
+
+	// SortedSetIdx represents the sorted set index
+	SortedSetIdx map[string]*zset.SortedSetNode
+
+	// ListIdx represents the list index
+	ListIdx map[string]*list.List
+
+	// Entries represents entry map
+	Entries map[string]*Entry
 )
+
+// Open returns a newly initialized DB object
+func Open(opt Options) (*DB, error) {
+	db := &DB{
+		BPTreeIdx: 		make(BPTreeIdx),
+		SetIdx:			make(SetIdx),
+		SortedSetIdx: 	make(SortedSetIdx),
+		ListIdx:		make(ListIdx),
+		MaxFileID:		0,
+		opt:			opt,
+		KeyCount: 		0,
+		closed:			false,
+		committedTxIds:	make(map[uint64]struct{}),
+	}
+
+	if ok := filesystem.PathIsExist(db.opt.Dir); !ok {
+		if err := os.MkdirAll(db.opt.Dir, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := db.buildIndexes(); err != nil {
+		return nil, fmt.Errorf("db.buildIdexes error: %s", err)
+	}
+
+	return db, nil
+}
+
+// buildIndexes builds indexes when db initialize resource
+func (db *DB) buildIndexes() (err error) {
+	var (
+		maxFileID	int64
+		dataFileIds	[]int
+	)
+
+	maxFileID, dataFileIds = db.getMaxFileIDAndFileIDs()
+}

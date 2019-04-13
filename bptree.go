@@ -123,7 +123,7 @@ func (t *BPTree) findRange(start, end []byte) (numFound int, keys [][]byte, poin
 		return 0, nil, nil
 	}
 
-	for j = 0; i < n.KeysNum && compare(n.Keys[j], start) < 0 {
+	for j = 0; i < n.KeysNum && compare(n.Keys[j], start) < 0; {
 		j++
 	}
 
