@@ -7,7 +7,13 @@ import (
 	"github.com/HelloChenHZ/nutsdb/ds/set"
 	"github.com/HelloChenHZ/nutsdb/ds/zset"
 	"github.com/xujiajun/utils/filesystem"
+	"github.com/xujiajun/utils/strconv2"
+	"io"
+	"io/ioutil"
 	"os"
+	"path"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -130,6 +136,36 @@ type (
 	Entries map[string]*Entry
 )
 
+// NewDataFile returns a newly initialized DataFile object
+func NewDataFile(path string, capacity int64, rwMode RWMode) (df *DataFile, err error) {
+	var rwManager RWManager
+
+	if capacity <= 0 {
+		return nil, ErrCapacity
+	}
+
+	if rwMode == FileIO {
+		rwManager, err = NewFileIORWManager(path, capacity)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if rwMode == MMap {
+		rwManager, err = NewMMapRWManager(path, capacity)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &DataFile {
+		path:		path,
+		writeOff:	0,
+		ActualSize:	0,
+		rwManager:	rwManager,
+	}, nil
+}
+
 // Open returns a newly initialized DB object
 func Open(opt Options) (*DB, error) {
 	db := &DB{
@@ -157,6 +193,68 @@ func Open(opt Options) (*DB, error) {
 	return db, nil
 }
 
+// setActiveFile sets the ActiveFile (DataFile object)
+func (db *DB) setActiveFile() (err error) {
+	filepath := db.getDataPath(db.MaxFileID)
+	db.ActiveFile, err = NewDataFIle(filepath, db.opt.SegmentSize, db.opt.RWMode)
+}
+
+// getMaxFileIDAndFileds returns max fileId and fileIds
+func (db *DB) getMaxFileIDAndFileIDs() (maxFileID int64, dataFileIds []int) {
+	files, _ := ioutil.ReadDir(db.opt.Dir)
+	if len(files) == 0 {
+		return 0, nil
+	}
+
+	maxFileID = 0
+
+	for _, f := range files {
+		id := f.Name()
+		fileSuffix := path.Ext(path.Base(id))
+		if fileSuffix != DataSuffix {
+			continue
+		}
+
+		id = strings.TrimSuffix(id, DataSuffix)
+		idVal, _ := strconv2.StrToInt(id)
+		dataFileIds = append(dataFileIds, idVal)
+	}
+
+	sort.Ints(dataFileIds)
+	maxFileID = int64(dataFileIds[len(dataFileIds)-1])
+
+	return
+}
+
+// getActiveFileWriteOff returns the write offset of activeFile
+func (db *DB) getActiveFileWriteOff() (off int64, err error) {
+	off  = 0
+	for {
+		if item, err := db.ActiveFile.ReadAt(int(off)); err == nil {
+			if item == nil {
+				break
+			}
+
+			off += item.Size()
+			//set ActiveFileActualSize
+			db.ActiveFile.ActualSize = off
+		} else {
+			if err == io.EOF {
+				break
+			}
+
+			return -1, fmt.Errorf("when build activeDataIndex readAt err: %s", err)
+		}
+	}
+
+	return
+}
+
+// getDataPath returns the data path at given fid
+func (db *DB) getDataPath(fID int64) string {
+	return db.opt.Dir + "/" + strconv2.Int64ToStr(fID) + DataSuffix
+}
+
 // buildIndexes builds indexes when db initialize resource
 func (db *DB) buildIndexes() (err error) {
 	var (
@@ -165,4 +263,28 @@ func (db *DB) buildIndexes() (err error) {
 	)
 
 	maxFileID, dataFileIds = db.getMaxFileIDAndFileIDs()
+
+	//init db.ActiveFile
+	db.MaxFileID = maxFileID
+
+	//set ActiveFile
+	if err = db.setActiveFile(); err != nil {
+		return
+	}
+
+	if dataFileIds == nil && maxFileID == 0 {
+		return
+	}
+
+	if db.ActiveFile.writeOff, err = db.getActiveFileWriteOff(); err != nil {
+		return
+	}
+
+	// build hint index
+	return db.buildHintIdx(dataFileIds)
+}
+
+// buildHintIdx builds the Hint Indexes
+func (db *DB) buildHintIdx(dataFileIds []int) error {
+	unconfirmedRecords, committedTxIds, err := db.parseDataFiles(dataFileIds)
 }
